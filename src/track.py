@@ -75,6 +75,7 @@ def run(
         dnn=False,  # use OpenCV DNN for ONNX inference
         vid_stride=1,  # video frame-rate stride
         retina_masks=False,
+        skip_frames=0
 ):
 
     source = str(source)
@@ -128,8 +129,15 @@ def run(
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile(), Profile())
     curr_frames, prev_frames = [None] * nr_sources, [None] * nr_sources
     a = time.time()
+    num_frames_processed = 0
+    skipped_frames = skip_frames
     for frame_idx, (path, im, im0s, vid_cap, s) in enumerate(dataset):
+        if skipped_frames != skip_frames:
+            skipped_frames += 1
+            continue
         
+        skipped_frames = 0
+        num_frames_processed += 1
         with dt[0]:
             im = torch.from_numpy(im).to(device)
             im = im.half() if half else im.float()  # uint8 to fp16/32
@@ -155,7 +163,6 @@ def run(
 
         # Process detections
         for i, det in enumerate(pred):  # detections per image
-
             seen += 1
             if webcam:  # nr_sources >= 1
                 p, im0, _ = path[i], im0s[i].copy(), dataset.count
@@ -271,7 +278,7 @@ def run(
                     if isinstance(vid_writer[i], cv2.VideoWriter):
                         vid_writer[i].release()  # release previous video writer
                     if vid_cap:  # video
-                        fps = vid_cap.get(cv2.CAP_PROP_FPS)
+                        fps = vid_cap.get(cv2.CAP_PROP_FPS) / (1 + skip_frames)
                         w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                         h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                     else:  # stream
@@ -286,7 +293,7 @@ def run(
         LOGGER.info(f"{s}{'' if len(det) else '(no detections), '}{sum([dt.dt for dt in dt if hasattr(dt, 'dt')]) * 1E3:.1f}ms")
     took  = time.time() - a
     print("Took:", took, "seconds")
-    print("FPS:", (frame_idx + 1) / took)
+    print("FPS:", num_frames_processed / took)
     # Print results
     t = tuple(x.t / seen * 1E3 for x in dt)  # speeds per image
     LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS, %.1fms {tracking_method} update per image at shape {(1, 3, *imgsz)}' % t)
@@ -333,6 +340,8 @@ def parse_opt():
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
     parser.add_argument('--vid-stride', type=int, default=1, help='video frame-rate stride')
     parser.add_argument('--retina-masks', action='store_true', help='whether to plot masks in native resolution')
+    parser.add_argument('--skip-frames', default=0, type=int, help='numbers of frames to skip when processing')
+    
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
     opt.tracking_config = ROOT / 'trackers' / opt.tracking_method / 'configs' / (opt.tracking_method + '.yaml')
