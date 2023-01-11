@@ -40,6 +40,22 @@ from utils.segment.general import masks2segments, process_mask, process_mask_nat
 from trackers.multi_tracker_zoo import create_tracker
 
 
+class CarTracker():
+    def __init__(self, plot_data=False):
+        self.cars = {}
+
+    def track_cars(self, updates):
+        
+        for update in updates:
+            is_existing = update["id"] in self.cars.keys()
+            
+            if not is_existing:
+                self.cars[update["id"]] = [update["center"]]
+                
+            else:
+                self.cars[update["id"]].append(update["center"])
+
+
 @torch.no_grad()
 def run(
         source='0',
@@ -75,7 +91,9 @@ def run(
         dnn=False,  # use OpenCV DNN for ONNX inference
         vid_stride=1,  # video frame-rate stride
         retina_masks=False,
-        skip_frames=0
+        skip_frames=0,
+        override_seg=False,
+        track_cars=False
 ):
 
     source = str(source)
@@ -126,6 +144,7 @@ def run(
 
     # Run tracking
     #model.warmup(imgsz=(1 if pt else nr_sources, 3, *imgsz))  # warmup
+    car_tracker = CarTracker()
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile(), Profile())
     curr_frames, prev_frames = [None] * nr_sources, [None] * nr_sources
     a = time.time()
@@ -214,8 +233,9 @@ def run(
                 with dt[3]:
                     outputs[i] = tracker_list[i].update(det.cpu(), im0)
                 
-                # draw boxes for visualization
+                # draw boxes for visualization and track objects
                 if len(outputs[i]) > 0:
+                    cars = [] # only used if tracking cars
                     for j, (output) in enumerate(outputs[i]):
     
                         bbox = output[0:4]
@@ -237,11 +257,13 @@ def run(
                         if save_vid or save_crop or show_vid:  # Add bbox to image
                             c = int(cls)  # integer class
                             id = int(id)  # integer id
-                            label = None if hide_labels else (f'{id} {names[c]}' if hide_conf else \
-                                (f'{id} {conf:.2f}' if hide_class else f'{id} {names[c]} {conf:.2f}'))
+                            label = None if hide_labels else (f'ID: {id} {names[c]}' if hide_conf else \
+                                (f'ID: {id} {conf:.2f}' if hide_class else f'ID: {id} {names[c]} {conf:.2f}'))
                             color = colors(c, True)
                             annotator.box_label(bbox, label, color=color)
-                            if is_seg:
+                            center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+                            annotator.centeroid(center)
+                            if is_seg and not override_seg:
                                 # Mask plotting
                                 annotator.masks(
                                     masks,
@@ -255,7 +277,19 @@ def run(
                             if save_crop:
                                 txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
                                 save_one_box(bbox.astype(np.int16), imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
-                            
+                        
+                        if track_cars:
+                            # store position info by id if the detection is a car
+                            if names[int(cls)] == 'car':
+                                cars.append({
+                                    'id': int(id),
+                                    'center': center,
+                                })
+                    if track_cars: 
+                        car_tracker.track_cars(cars)
+                    
+
+                                         
             else:
                 pass
                 #tracker_list[i].tracker.pred_n_update_all_tracks()
@@ -341,6 +375,9 @@ def parse_opt():
     parser.add_argument('--vid-stride', type=int, default=1, help='video frame-rate stride')
     parser.add_argument('--retina-masks', action='store_true', help='whether to plot masks in native resolution')
     parser.add_argument('--skip-frames', default=0, type=int, help='numbers of frames to skip when processing')
+    parser.add_argument('--override-seg', default=False, action='store_true', help='whether to display seg bounds')
+    parser.add_argument('--track-cars', default=False, action='store_true', help='whether to track cars')
+    
     
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand

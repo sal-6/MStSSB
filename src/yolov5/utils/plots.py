@@ -113,6 +113,20 @@ class Annotator:
                             txt_color,
                             thickness=tf,
                             lineType=cv2.LINE_AA)
+                            
+    def centeroid(self, center, color=(0, 0, 0), radius=10):
+        if self.pil:
+            # draw a circle with given radius at center of box
+            
+            self.draw.ellipse((center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius),
+                              fill=color,
+                              outline=color)
+        else:
+            # draw a circle with given radius at center of box with cv2
+
+            cv2.circle(self.im, (int(center[0]), int(center[1])), radius, color, -1)
+            
+
 
     def masks(self, masks, colors, im_gpu, alpha=0.5, retina_masks=False):
         """Plot masks at once.
