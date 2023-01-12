@@ -8,6 +8,7 @@ os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
+import pprint
 import time
 import sys
 import platform
@@ -41,8 +42,9 @@ from trackers.multi_tracker_zoo import create_tracker
 
 
 class CarTracker():
-    def __init__(self, plot_data=False):
+    def __init__(self, plot_data=False, fps=30):
         self.cars = {}
+        self.fps = fps
 
     def track_cars(self, updates):
         
@@ -50,11 +52,75 @@ class CarTracker():
             is_existing = update["id"] in self.cars.keys()
             
             if not is_existing:
-                self.cars[update["id"]] = [update["center"]]
+                self.cars[update["id"]] = {
+                    "centers": [update["center"]],
+                    "frame_index": [update["frame_idx"]]
+                }
                 
             else:
-                self.cars[update["id"]].append(update["center"])
+                self.cars[update["id"]]["centers"].append(update["center"])
+                self.cars[update["id"]]["frame_index"].append(update["frame_idx"])
+    
+    def process_data(self):
+        
+        # convert frames to times 
+        for key in self.cars.keys():
+            
+            tmes = []
+            for item in self.cars[key]["frame_index"]:
+                tmes.append(item / self.fps)
+            
+            xs = []
+            ys = []
+            
+            for item in self.cars[key]["centers"]:
+                xs.append(item[0])
+                ys.append(-1 * item[1])
+            
+            self.cars[key]["xs"] = xs
+            self.cars[key]["ys"] = ys   
+            self.cars[key]["times"] = tmes
+            vels = []
+            for i in range(len(tmes) - 1):
+                del_t = tmes[i + 1] - tmes[i]
+                del_x = xs[i + 1] - xs[i]
+                del_y = ys[i + 1] - ys[i]
+                dist = np.sqrt(del_x ** 2 + del_y ** 2)
+                vel = dist / del_t
+                vels.append(vel)
+            self.cars[key]["vels"] = vels
+                
+            
+    def plot_paths(self):
+        print("Plotting paths")
+        
+        import matplotlib.pyplot as plt
+        
+        plt.figure()
 
+        for key in self.cars.keys():
+            plt.plot(self.cars[key]["xs"], self.cars[key]["ys"], label=key)
+        
+        plt.legend()
+        plt.gca().set_aspect('equal', adjustable='box')
+        
+        plt.savefig("paths.png")
+        
+        plt.figure()
+        
+        for key in self.cars.keys():
+            ts = self.cars[key]["times"]
+            # remove last time 
+            ts.pop()
+            vs = self.cars[key]["vels"]
+            plt.plot(ts, vs, label=key)
+            
+        plt.legend()
+        
+        plt.savefig("vels.png")
+        
+    
+    
 
 @torch.no_grad()
 def run(
@@ -144,7 +210,7 @@ def run(
 
     # Run tracking
     #model.warmup(imgsz=(1 if pt else nr_sources, 3, *imgsz))  # warmup
-    car_tracker = CarTracker()
+    car_tracker = CarTracker(fps=10)
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile(), Profile())
     curr_frames, prev_frames = [None] * nr_sources, [None] * nr_sources
     a = time.time()
@@ -284,6 +350,7 @@ def run(
                                 cars.append({
                                     'id': int(id),
                                     'center': center,
+                                    "frame_idx": num_frames_processed - 1
                                 })
                     if track_cars: 
                         car_tracker.track_cars(cars)
@@ -328,6 +395,9 @@ def run(
     took  = time.time() - a
     print("Took:", took, "seconds")
     print("FPS:", num_frames_processed / took)
+    car_tracker.process_data()
+    pprint.pprint(car_tracker.cars)
+    car_tracker.plot_paths()
     # Print results
     t = tuple(x.t / seen * 1E3 for x in dt)  # speeds per image
     LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS, %.1fms {tracking_method} update per image at shape {(1, 3, *imgsz)}' % t)
