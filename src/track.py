@@ -16,6 +16,7 @@ import numpy as np
 from pathlib import Path
 import torch
 import torch.backends.cudnn as cudnn
+import pickle
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # yolov5 strongsort root directory
@@ -42,9 +43,17 @@ from trackers.multi_tracker_zoo import create_tracker
 
 
 class CarTracker():
-    def __init__(self, plot_data=False, fps=30):
+    def __init__(self, stop_bounds=None, plot_data=False, fps=30, path_to_save="./"):
+        """Will track cars during clip. Will compute data about velocity and stopping after the clip is over.
+
+        Args:
+            stop_bounds (list, optional): Provide the top left and bottom right cords of rectangle describing where a valid stop is. Defaults to None.
+            plot_data (bool, optional): Whether to plot the position and velocity plots. Defaults to False.
+            fps (int, optional): Video FPS. Defaults to 30.
+        """
         self.cars = {}
         self.fps = fps
+        self.path = path_to_save
 
     def track_cars(self, updates):
         
@@ -90,9 +99,7 @@ class CarTracker():
                 vels.append(vel)
             self.cars[key]["vels"] = vels
                 
-            
     def plot_paths(self):
-        print("Plotting paths")
         
         import matplotlib.pyplot as plt
         
@@ -104,7 +111,7 @@ class CarTracker():
         plt.legend()
         plt.gca().set_aspect('equal', adjustable='box')
         
-        plt.savefig("paths.png")
+        plt.savefig(os.path.join(self.path, "paths.png"))
         
         plt.figure()
         
@@ -117,10 +124,25 @@ class CarTracker():
             
         plt.legend()
         
-        plt.savefig("vels.png")
+        plt.savefig(os.path.join(self.path, "vels.png"))
         
-    
-    
+        fig = plt.figure()
+        # change projection to 3d
+        ax = plt.axes(projection='3d')
+        
+        # plot velocity vs position
+        
+        for key in self.cars.keys():
+            x_vals = self.cars[key]["xs"][1:len(self.cars[key]["xs"])]
+            y_vals = self.cars[key]["ys"][1:len(self.cars[key]["ys"])]
+            ax.plot3D(x_vals, y_vals, self.cars[key]["vels"], label=key)
+        
+        ax.legend()
+        plt.savefig(os.path.join(self.path, "vels_3d.png"))
+        
+        pickle.dump(fig, open(os.path.join(self.path, "fig.pickle"), "wb"))
+
+
 
 @torch.no_grad()
 def run(
@@ -210,7 +232,7 @@ def run(
 
     # Run tracking
     #model.warmup(imgsz=(1 if pt else nr_sources, 3, *imgsz))  # warmup
-    car_tracker = CarTracker(fps=10)
+    car_tracker = CarTracker(fps=10, path_to_save=save_dir)
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile(), Profile())
     curr_frames, prev_frames = [None] * nr_sources, [None] * nr_sources
     a = time.time()
@@ -271,7 +293,7 @@ def run(
             txt_path = str(save_dir / 'tracks' / txt_file_name)  # im.txt
             s += '%gx%g ' % im.shape[2:]  # print string
             imc = im0.copy() if save_crop else im0  # for save_crop
-
+            
             annotator = Annotator(im0, line_width=line_thickness, example=str(names))
             
             if hasattr(tracker_list[i], 'tracker') and hasattr(tracker_list[i].tracker, 'camera_update'):
